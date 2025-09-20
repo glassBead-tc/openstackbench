@@ -1,6 +1,7 @@
 """Run context for managing benchmark run state and configuration."""
 
 import json
+import os
 import uuid
 from datetime import datetime
 from enum import Enum
@@ -209,17 +210,35 @@ class RunStatus(BaseModel):
         completed = []
         for use_case_num in self.use_cases.keys():
             use_case_dir = data_dir / f"use_case_{use_case_num}"
-            
+
             # Check if directory exists and has the target file
             if use_case_dir.exists():
                 use_case = self.use_cases[use_case_num]
-                target_file_path = use_case_dir / use_case.target_file
-                
+                original_target = Path(use_case.target_file)
+                target_file_path = use_case_dir / original_target
+
                 # Check for the exact target file
                 if target_file_path.exists():
                     self.use_cases[use_case_num].implementation_exists = True
                     completed.append(use_case_num)
-        
+                    continue
+
+                # Fall back to matching the stem to support alternate extensions
+                target_stem = original_target.stem
+                for candidate in use_case_dir.glob(f"{target_stem}.*"):
+                    if candidate.is_file():
+                        self.use_cases[use_case_num].implementation_exists = True
+                        if (
+                            original_target.parts
+                            and original_target.parts[0].startswith("use_case_")
+                        ):
+                            new_relative = Path(original_target.parts[0]) / candidate.name
+                            self.use_cases[use_case_num].target_file = str(new_relative)
+                        else:
+                            self.use_cases[use_case_num].target_file = candidate.name
+                        completed.append(use_case_num)
+                        break
+
         self.updated_at = datetime.now()
         return completed
     
@@ -420,14 +439,17 @@ class RunContext(BaseModel):
         self.save()
     
     def mark_use_case_executed(
-        self, 
-        use_case_number: int, 
-        method: ExecutionMethod, 
+        self,
+        use_case_number: int,
+        method: ExecutionMethod,
         implementation_file: Optional[Path] = None,
         error: Optional[str] = None
     ) -> None:
         """Mark a use case as executed and save context."""
         self.status.mark_use_case_executed(use_case_number, method, implementation_file, error)
+        if self.status._can_complete_execution_phase():
+            self.status.execution_phase_completed = True
+            self.status.update_phase_automatically()
         self.save()
     
     def mark_use_case_analyzed(
@@ -444,8 +466,10 @@ class RunContext(BaseModel):
         """Simple detection and update for IDE manual implementations."""
         # Find use cases with implementation files
         completed = self.status.detect_completed_implementations(self.data_dir)
-        
+
         newly_detected = []
+        context_file = self.run_dir / "run_context.json"
+        previous_mtime = context_file.stat().st_mtime if context_file.exists() else 0.0
         for use_case_num in completed:
             uc = self.status.use_cases[use_case_num]
             # Only update if not already marked as executed
@@ -460,10 +484,16 @@ class RunContext(BaseModel):
             # Check if execution phase should be marked as completed
             if self.status._can_complete_execution_phase():
                 self.status.execution_phase_completed = True
-            
+
             self.status.update_phase_automatically()
             self.save()
-        
+
+            if context_file.exists():
+                new_mtime = context_file.stat().st_mtime
+                if new_mtime <= previous_mtime:
+                    bump = previous_mtime + 1e-6
+                    os.utime(context_file, (bump, bump))
+
         return newly_detected
     
     def is_manual_agent(self) -> bool:

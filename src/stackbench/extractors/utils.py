@@ -34,7 +34,7 @@ def count_tokens(content: str, model: str = "gpt-5") -> int:
         return len(encoding.encode(content))
     except Exception:
         # Fallback: rough approximation (1 token ≈ 4 characters)
-        return len(content) // 4
+        return (len(content) + 3) // 4
 
 
 def truncate_content(content: str, max_tokens: int = 8000, model: str = "gpt-5") -> str:

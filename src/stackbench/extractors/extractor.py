@@ -4,6 +4,7 @@ import json
 import os
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import inspect
 from typing import List
 
 import dspy
@@ -40,7 +41,16 @@ def setup_dspy():
 def process_single_document(document: Document, language: str = "python") -> List[UseCase]:
     """Process a single document and return validated use cases."""
     processor = DocumentProcessor()
-    return processor.process_document(document, language=language)
+    process_fn = processor.process_document
+
+    try:
+        signature = inspect.signature(process_fn)
+        if "language" in signature.parameters:
+            return process_fn(document, language=language)
+    except (TypeError, ValueError):
+        pass
+
+    return process_fn(document)
 
 
 def get_relative_path(file_path, repo_dir):

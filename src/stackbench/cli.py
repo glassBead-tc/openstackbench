@@ -12,9 +12,9 @@ import subprocess
 
 from .config import get_config
 from .core.repository import RepositoryManager
-from .core.run_context import RunContext, RunPhase
-from .extractors.extractor import extract_use_cases
-from .agents.cursor_ide import CursorIDEAgent
+from .core.run_context import ExecutionMethod, RunContext, RunPhase
+from .extractors.extractor import extract_use_cases, load_use_cases
+from .agents import CursorIDEAgent, create_agent, list_agents
 from .analyzers.individual_analyzer import IndividualAnalyzer
 from .analyzers.overall_analyzer import OverallAnalyzer
 
@@ -119,7 +119,7 @@ def cli(ctx):
 @click.argument("repo_url")
 @click.option(
     "--include-folders", "-i",
-    default="", 
+    default="",
     help="Comma-separated list of folders to include (e.g., docs,examples,tests)"
 )
 @click.option(
@@ -294,17 +294,114 @@ def setup(repo_url: str, include_folders: str, agent: str, branch: str, language
     help="Git branch to clone (default: main)"
 )
 def run(repo_url: str, include_folders: str, agent: str, branch: str):
-    """Run full automated benchmark pipeline for CLI agents (clone + extract + execute + analyze)."""
+    """Run clone, extraction, and automated execution with a CLI agent."""
+
     show_logo()
-    console.print(f"[bold red]✗[/bold red] Automated CLI agents not yet implemented.")
+    available_cli_agents = list_agents("cli")
+
+    try:
+        cli_agent = create_agent(agent)
+    except ValueError:
+        console.print(
+            f"[bold red]✗[/bold red] Agent '{agent}' not supported. "
+            f"Supported CLI agents: {', '.join(available_cli_agents)}"
+        )
+        sys.exit(1)
+
+    if cli_agent.is_manual():
+        console.print(
+            "[bold red]✗[/bold red] Selected agent requires manual execution. "
+            "Use 'stackbench setup' instead."
+        )
+        sys.exit(1)
+
+    console.print(f"[bold blue]Running automated pipeline with {agent}[/bold blue]")
+    parsed_folders = parse_include_folders(include_folders)
+
+    try:
+        with console.status("[bold green]Cloning repository..."):
+            repo_manager = RepositoryManager()
+            context = repo_manager.clone_repository(
+                repo_url=repo_url,
+                agent_type=agent,
+                include_folders=parsed_folders,
+                branch=branch,
+            )
+        console.print(f"[bold green]✓[/bold green] Repository cloned: {context.repo_name}")
+        console.print(f"[bold blue]Run ID:[/bold blue] {context.run_id}")
+    except Exception as exc:
+        console.print(f"[bold red]✗[/bold red] Failed to clone repository: {exc}")
+        sys.exit(1)
+
+    try:
+        with console.status("[bold green]Extracting use cases..."):
+            extraction_result = extract_use_cases(context)
+        console.print(
+            f"[bold green]✓[/bold green] Extracted {len(extraction_result.final_use_cases)} use cases"
+        )
+    except Exception as exc:
+        context.add_error(f"Extraction failed: {exc}")
+        console.print(f"[bold red]✗[/bold red] Extraction failed: {exc}")
+        sys.exit(1)
+
+    use_cases = load_use_cases(context)
+    if not use_cases:
+        console.print("[bold red]✗[/bold red] No use cases available for execution")
+        sys.exit(1)
+
+    try:
+        cli_agent.prepare_environment(context)
+    except Exception as exc:
+        context.add_error(f"Agent environment setup failed: {exc}")
+        console.print(f"[bold red]✗[/bold red] Agent setup failed: {exc}")
+        sys.exit(1)
+
+    execution_failures = []
+
+    for index, use_case in enumerate(use_cases, 1):
+        target_dir = context.data_dir / f"use_case_{index}"
+        console.print(
+            f"[bold cyan]▶ Executing use case {index}: {use_case.name}[/bold cyan]"
+        )
+
+        try:
+            with console.status("[bold green]Requesting completion..."):
+                response = cli_agent.execute(context, use_case, target_dir)
+            artifacts = cli_agent.collect_artifacts(context, use_case, target_dir, response)
+            generated_path = artifacts.get("generated_file") or target_dir / use_case.target_file
+            context.mark_use_case_executed(
+                index,
+                ExecutionMethod.CLI_AUTOMATED,
+                implementation_file=generated_path,
+            )
+            console.print(
+                f"  [green]✓[/green] Completed -> {generated_path}"
+            )
+        except Exception as exc:
+            execution_failures.append((index, str(exc)))
+            context.mark_use_case_executed(
+                index,
+                ExecutionMethod.CLI_AUTOMATED,
+                error=str(exc),
+            )
+            console.print(f"  [bold red]✗[/bold red] Execution failed: {exc}")
+
+    if execution_failures:
+        console.print()
+        console.print("[bold red]Execution failures detected:[/bold red]")
+        for index, message in execution_failures:
+            console.print(f"  • Use Case {index}: {message}")
+        console.print("[yellow]Review agent logs in data/agent_logs for details.[/yellow]")
+    else:
+        console.print()
+        console.print("[bold green]✓ All use cases executed successfully![/bold green]")
+
     console.print()
-    console.print("[bold]Coming Soon:[/bold] Full automation with CLI agents")
-    console.print(f"[dim]• Target agent: {agent}[/dim]")
-    console.print(f"[dim]• Repository: {repo_url}[/dim]")
-    console.print()
-    console.print("[bold]Alternative - Use IDE workflow:[/bold]")
-    console.print(f"[cyan]stackbench setup {repo_url} -a cursor[/cyan]")
-    console.print(f"[cyan]stackbench analyze <run-id>[/cyan]")
+    console.print("[bold]Next Steps:[/bold]")
+    console.print(f"• Analyze results: [cyan]stackbench analyze {context.run_id}[/cyan]")
+    console.print(
+        "• Inspect artifacts under the run's data directory for prompts, responses, and logs."
+    )
 
 
 @cli.command()
@@ -315,18 +412,104 @@ def run(repo_url: str, include_folders: str, agent: str, branch: str):
     help="CLI agent type for automated execution (e.g., openai, anthropic)"
 )
 def execute(run_id: str, agent: str):
-    """Execute use cases with specified CLI agent (not yet implemented)."""
+    """Execute extracted use cases for an existing run using a CLI agent."""
+
     show_logo()
-    console.print(f"[bold red]✗[/bold red] Automated CLI execution not yet implemented.")
+
+    available_cli_agents = list_agents("cli")
+
+    try:
+        context = RunContext.load(run_id)
+    except Exception as exc:
+        console.print(f"[bold red]✗[/bold red] Failed to load run: {exc}")
+        sys.exit(1)
+
+    try:
+        cli_agent = create_agent(agent)
+    except ValueError:
+        console.print(
+            f"[bold red]✗[/bold red] Agent '{agent}' not supported. "
+            f"Supported CLI agents: {', '.join(available_cli_agents)}"
+        )
+        sys.exit(1)
+
+    if cli_agent.is_manual():
+        console.print(
+            "[bold red]✗[/bold red] Selected agent requires manual execution. "
+            "Use 'stackbench setup' instead."
+        )
+        sys.exit(1)
+
+    context.config.agent_type = agent
+    context.save()
+
+    use_cases = load_use_cases(context)
+    if not use_cases:
+        console.print("[bold red]✗[/bold red] No use cases found. Run extraction first.")
+        sys.exit(1)
+
+    pending = []
+    if context.status.use_cases:
+        for index, state in context.status.use_cases.items():
+            if not state.is_executed:
+                pending.append(index)
+    else:
+        pending = list(range(1, len(use_cases) + 1))
+
+    if not pending:
+        console.print("[bold yellow]⚠[/bold yellow] All use cases already executed.")
+        sys.exit(0)
+
+    try:
+        cli_agent.prepare_environment(context)
+    except Exception as exc:
+        context.add_error(f"Agent environment setup failed: {exc}")
+        console.print(f"[bold red]✗[/bold red] Agent setup failed: {exc}")
+        sys.exit(1)
+
+    execution_failures = []
+
+    for index in pending:
+        use_case = use_cases[index - 1]
+        target_dir = context.data_dir / f"use_case_{index}"
+        console.print(
+            f"[bold cyan]▶ Executing use case {index}: {use_case.name}[/bold cyan]"
+        )
+
+        try:
+            with console.status("[bold green]Requesting completion..."):
+                response = cli_agent.execute(context, use_case, target_dir)
+            artifacts = cli_agent.collect_artifacts(context, use_case, target_dir, response)
+            generated_path = artifacts.get("generated_file") or target_dir / use_case.target_file
+            context.mark_use_case_executed(
+                index,
+                ExecutionMethod.CLI_AUTOMATED,
+                implementation_file=generated_path,
+            )
+            console.print(
+                f"  [green]✓[/green] Completed -> {generated_path}"
+            )
+        except Exception as exc:
+            execution_failures.append((index, str(exc)))
+            context.mark_use_case_executed(
+                index,
+                ExecutionMethod.CLI_AUTOMATED,
+                error=str(exc),
+            )
+            console.print(f"  [bold red]✗[/bold red] Execution failed: {exc}")
+
+    if execution_failures:
+        console.print()
+        console.print("[bold red]Execution failures detected:[/bold red]")
+        for index, message in execution_failures:
+            console.print(f"  • Use Case {index}: {message}")
+    else:
+        console.print()
+        console.print("[bold green]✓ All pending use cases executed successfully![/bold green]")
+
     console.print()
-    console.print("[bold]Coming Soon:[/bold] Automated use case execution")
-    console.print(f"[dim]• Run ID: {run_id}[/dim]")
-    console.print(f"[dim]• Target agent: {agent}[/dim]")
-    console.print()
-    console.print("[bold]Alternative - Use IDE workflow:[/bold]")
-    console.print(f"[cyan]stackbench print-prompt {run_id} --use-case 1[/cyan]")
-    console.print(f"[cyan]# Create solutions manually in IDE[/cyan]")
-    console.print(f"[cyan]stackbench analyze {run_id}[/cyan]")
+    console.print("[bold]Next Steps:[/bold]")
+    console.print(f"• Analyze results: [cyan]stackbench analyze {context.run_id}[/cyan]")
 
 
 @cli.command()
