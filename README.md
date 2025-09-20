@@ -21,7 +21,7 @@ Existing code generation benchmarks typically evaluate models, not agents, and f
 
 StackBench fills this gap by providing a tool that benchmarks coding agents on real-world, library-specific tasks. It helps maintainers and developers discover failures, spot improvement opportunities, and get actionable insights into how their documentation and APIs are being used by modern AI coding assistants.
 
-See the [StackBench Documentation](https://docs.stackbench.ai/) and [Getting Started Guide](https://docs.stackbench.ai/tutorials/0.getting-started.html) to get started.
+See the [StackBench Documentation](https://docs.stackbench.ai/), [Getting Started Guide](https://docs.stackbench.ai/tutorials/0.getting-started.html), and the local [Agent Support reference](docs/agent-support.md) to get started.
 
 ## Prerequisites
 
@@ -79,10 +79,16 @@ stackbench print-prompt <run-id> -u 1 --copy
 stackbench analyze <run-id>
 ```
 
-**Streamlined CLI Workflow (Coming Soon):**
+**Streamlined CLI Workflow:**
 ```bash
-# Full automation for CLI agents (not yet implemented)
-stackbench run https://github.com/user/awesome-lib -a claude-code
+# 1. Run the full automated pipeline with a CLI agent
+stackbench run https://github.com/user/awesome-lib -a openai-cli
+
+# 2. (Optional) Re-run execution for additional agents or retries
+stackbench execute <run-id> --agent anthropic-cli
+
+# 3. Analyze results
+stackbench analyze <run-id>
 ```
 
 **Setup Options:**
@@ -123,12 +129,16 @@ This command:
 - Shows generated use cases and next steps
 - Ready for manual IDE execution
 
-**`stackbench run <repo-url>`** *(Coming Soon)*
+**`stackbench run <repo-url>`**
 Full automated benchmark pipeline for CLI agents.
 
 ```bash
-# Automated execution (not yet implemented)
-stackbench run https://github.com/user/awesome-lib -a claude-code -i docs,examples
+# Automated execution with OpenAI-compatible agent
+stackbench run https://github.com/user/awesome-lib -a openai-cli -i docs,examples
+
+# Execute with a local command based agent
+STACKBENCH_LOCAL_AGENT_COMMAND_TEMPLATE="python scripts/run_local.py --prompt {prompt_file} --output {output_file}" \
+  stackbench run https://github.com/user/awesome-lib -a local-exec
 ```
 
 ### Individual Steps

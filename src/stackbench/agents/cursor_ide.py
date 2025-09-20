@@ -3,7 +3,8 @@
 from pathlib import Path
 
 from .base import Agent
-from ..config import get_config, find_env_file
+from .utils import resolve_target_path
+from ..config import find_env_file
 
 
 class CursorIDEAgent(Agent):
@@ -26,6 +27,13 @@ class CursorIDEAgent(Agent):
         # Use absolute paths for clarity
         absolute_target_dir = target_dir.resolve()
         absolute_repo_dir = context.repo_dir.resolve()
+        target_file_path = resolve_target_path(target_dir, use_case.target_file)
+
+        try:
+            relative_target_file = target_file_path.relative_to(absolute_target_dir)
+        except ValueError:
+            relative_target_file = Path(use_case.target_file)
+
         
         # Get environment file path
         env_file = find_env_file()
@@ -67,7 +75,7 @@ Implement the use case described above.
 
 **Use Documentation for Help:** Please review and use the documentation in the repository to help you understand the library's APIs, patterns, and best practices.
 
-**File Creation:** Create a single entry file called `{use_case.target_file}` (solution.py or solution.js depending on the library language).
+**File Creation:** Create a single entry file called `{relative_target_file}` (solution.py or solution.js depending on the library language).
 
 **Target Directory:** Create the directory `{absolute_target_dir}` if it doesn't exist. All files that you decide to create should be placed in this directory.
 
@@ -104,7 +112,7 @@ load_dotenv(`{env_path_info}`)
 ---
 **Repository Path:** `{absolute_repo_dir}`
 **Target Directory:** `{absolute_target_dir}`
-**Main File:** `{absolute_target_dir}/{use_case.target_file}`
+**Main File:** `{target_file_path}`
 """
         
         return prompt

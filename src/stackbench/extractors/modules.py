@@ -1,6 +1,7 @@
 """DSPy modules for document processing and use case extraction."""
 
 import dspy
+import inspect
 from typing import List, Tuple
 
 from .models import Document, UseCase
@@ -27,29 +28,37 @@ class DocumentProcessor(dspy.Module):
     def extract_use_cases(self, document: Document, language: str = "python") -> List[UseCase]:
         """Extract use cases from a document."""
         try:
-            result = self.extractor(
-                content=document.truncated_content,
-                source_file=str(document.file_path),
-                language=language
-            )
+            call_kwargs = {
+                "content": document.truncated_content,
+                "source_file": str(document.file_path),
+            }
+
+            try:
+                signature = inspect.signature(self.extractor)
+                if "language" in signature.parameters:
+                    call_kwargs["language"] = language
+            except (TypeError, ValueError):
+                pass
+
+            result = self.extractor(**call_kwargs)
             
             # Ensure use cases have proper source_document
             use_cases = []
-            for use_case in result.use_cases:
+            for index, use_case in enumerate(result.use_cases, 1):
                 # Set source_document if not already set
                 if not use_case.source_document:
                     use_case.source_document = [str(document.file_path)]
-                
+
                 # DSPy should have determined target_file based on language context
                 # If still not set, provide a basic fallback with appropriate extension
                 if not use_case.target_file:
                     ext = {
                         'python': 'py',
-                        'javascript': 'js', 
+                        'javascript': 'js',
                         'typescript': 'ts',
                     }.get(language, 'py')
-                    use_case.target_file = f"solution.{ext}"
-                
+                    use_case.target_file = f"use_case_{index}/solution.{ext}"
+
                 use_cases.append(use_case)
             
             return use_cases

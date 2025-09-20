@@ -25,13 +25,36 @@ class Config(BaseSettings):
     
     # Agent settings
     default_agent: str = "cursor"
-    env_file_path: str = ".env" 
-    
-    # Claude Code analysis settings
+    env_file_path: str = ".env"
+
+    # OpenAI compatible agent settings
+    openai_api_key: Optional[str] = None
+    openai_api_base: str = "https://api.openai.com/v1"
+    openai_model: str = "gpt-4o-mini"
+    openai_temperature: float = 0.0
+    openai_max_retries: int = 3
+    openai_request_timeout: int = 60
+
+    # Anthropic agent settings
     anthropic_api_key: Optional[str] = None
+    anthropic_model: str = "claude-3.5-sonnet"
+    anthropic_api_url: str = "https://api.anthropic.com/v1/messages"
+    anthropic_api_version: str = "2023-06-01"
+    anthropic_temperature: float = 0.0
+    anthropic_max_tokens: int = 4000
+    anthropic_max_retries: int = 3
+    anthropic_request_timeout: int = 60
+
+    # Claude Code analysis settings
     claude_model: str = "claude-sonnet-4"
     analysis_max_turns: int = 50
     analysis_max_workers: int = 3
+
+    # Local agent defaults
+    local_agent_command_template: Optional[str] = None
+    local_agent_model: str = "local-coder"
+    local_agent_timeout: int = 120
+    local_agent_shell: bool = False
     
     # Logging
     log_level: str = "INFO"
@@ -43,6 +66,20 @@ class Config(BaseSettings):
         if v.upper() not in valid_levels:
             raise ValueError(f"log_level must be one of {valid_levels}")
         return v.upper()
+
+    @field_validator("openai_temperature", "anthropic_temperature")
+    @classmethod
+    def validate_temperature(cls, v: float) -> float:
+        if not 0 <= v <= 2:
+            raise ValueError("temperature must be between 0 and 2")
+        return v
+
+    @field_validator("openai_max_retries", "anthropic_max_retries", "local_agent_timeout")
+    @classmethod
+    def validate_positive_int(cls, v: int) -> int:
+        if v <= 0:
+            raise ValueError("value must be positive")
+        return v
     
     model_config = ConfigDict(
         env_file_encoding="utf-8",
@@ -93,5 +130,5 @@ def get_config() -> Config:
     # Create config instance only once
     if _config_instance is None:
         _config_instance = Config()
-    
+
     return _config_instance
